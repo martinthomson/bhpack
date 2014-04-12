@@ -47,16 +47,19 @@ var rounds = parseInt(argv.shift(), 10);
 var sizes = argv.map(function(size) {
   return parseInt(size, 10);
 });
-console.log('Running ' + rounds + ' random sequences of lengths: ' + sizes.join('\t'));
+console.log(rounds + ' random sequences of lengths: \t' + sizes.join('\t\t'));
 var results = sizes.map(function(size) {
   return compare(rounds, size);
 });
 console.log('Average sizes:');
 
+var referenceKey = 'base64Hpack';
 function printResults(label, key, pad) {
   pad = (typeof pad !== 'undefined') ? pad : '';
-  console.log(label + ': \t' + pad + results.map(function(r) {
-    return r[key] / rounds;
+  console.log(label + ': \t\t' + pad + results.map(function(r) {
+    var average = r[key] / rounds;
+    var improvement = Math.round(r[key] / r[referenceKey] * 10000) / 100;
+    return average + ' (' + improvement + ')';
   }).join('\t'))
 }
 printResults('Raw Huffman coding (invalid)', 'hpack');
