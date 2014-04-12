@@ -1,6 +1,6 @@
 {
   "name": "bhpack",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "main": "./bhpack.js",
   "dependencies": {
   },
@@ -9,7 +9,8 @@
     "urlsafe-base64": "~0.0.2"
   },
   "scripts": {
-    "test": "mocha test.js"
+    "test": "mocha test.js",
+    "compare": "node compare.js 100 10 20 30"
   },
   "author": "Martin Thomson (martin.thomson@gmail.com)",
   "repository": {

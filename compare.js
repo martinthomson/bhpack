@@ -41,9 +41,9 @@ function compare(rounds, size) {
     score.base64Hpack.add(hpack.encode(b64));
     var cookie = new Buffer(bhpack.cookie.encode(data), 'utf8');
     score.bhpackCookie.add(hpack.encode(cookie));
-    var uri = new Buffer(bhpack.uriSafe.encode(data), 'utf8');
+    var uri = new Buffer(bhpack.uri.encode(data), 'utf8');
     score.bhpackUri.add(hpack.encode(uri));
-    var query = new Buffer(bhpack.uriQuery.encode(data), 'utf8');
+    var query = new Buffer(bhpack.query.encode(data), 'utf8');
     score.bhpackQuery.add(hpack.encode(query));
   }
   return score;
@@ -64,7 +64,7 @@ console.log(rounds + ' random sequences of lengths: \t' + sizes.join('\t\t\t'));
 var results = sizes.map(function(size) {
   return compare(rounds, size);
 });
-console.log('Average sizes:');
+console.log('Average sizes: min/ave/max (size compared against Base64+Huffman)');
 
 var referenceKey = 'base64Hpack';
 function printResults(label, key, pad) {
@@ -72,7 +72,7 @@ function printResults(label, key, pad) {
   console.log(label + ': \t\t' + pad + results.map(function(r) {
     var stats = r[key].min + '/' + r[key].average(rounds) + '/' + r[key].max;
     var improvement = Math.round(r[key].len / r[referenceKey].len * 10000) / 100;
-    return stats + ' (' + improvement + ')';
+    return stats + ' (' + improvement + '%)';
   }).join('\t'))
 }
 //console.log(results);

@@ -78,6 +78,9 @@ function BinaryHpack(table, allowed) {
     var code = allowed.charCodeAt(i);
     this.symbols.push(new Node(ch, 1 / inputLengths[code]));
   }
+  this.symbols.sort(function(a, b) {
+    return a.c.charCodeAt(0) - b.c.charCodeAt(0);
+  });
   // sort by (ascending) probability
   this.symbols.sort(function(a, b) {
     return a.p - b.p;
@@ -215,6 +218,6 @@ module.exports = {
   ALLOWED_URI_QUERY: ALLOWED_URI_QUERY,
   BinaryHpack: BinaryHpack,
   cookie: new BinaryHpack(HPACK_TABLE, ALLOWED_COOKIE),
-  uriSafe: new BinaryHpack(HPACK_TABLE, ALLOWED_URI),
-  uriQuery: new BinaryHpack(HPACK_TABLE, ALLOWED_URI_QUERY)
+  uri: new BinaryHpack(HPACK_TABLE, ALLOWED_URI),
+  query: new BinaryHpack(HPACK_TABLE, ALLOWED_URI_QUERY)
 };
