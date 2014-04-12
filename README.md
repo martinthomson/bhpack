@@ -2,6 +2,12 @@
 
 Pack binary header fields in HPACK more efficiently
 
+# Install
+
+```sh
+npm install bhpack
+```
+
 # Usage
 
 Encode binary data as strings that are more efficiently encoded
@@ -62,3 +68,7 @@ Because HPACK is kind to URI-safe base64, but not as kind as it could be.
 You don't want to do this for security reasons.  Huffman encoding reveals a tiny
 bit about your data based on the length that it encodes to.  This can be
 slightly worse.
+
+# License
+
+MIT
