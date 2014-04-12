@@ -5,7 +5,8 @@
   "dependencies": {
   },
   "devDependencies": {
-    "mocha": "~1.18"
+    "mocha": "~1.18",
+    "urlsafe-base64": "~0.0.2"
   },
   "scripts": {
     "test": "mocha test.js"
