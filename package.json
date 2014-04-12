@@ -1,6 +1,7 @@
 {
   "name": "bhpack",
   "version": "0.1.0",
+  "description": "Pack binary data more efficiently into strings for HTTP/2.",
   "main": "./bhpack.js",
   "dependencies": {
   },
