@@ -1,10 +1,5 @@
 'use strict';
 
-var ALLOWED_CHARS = '!#$%&\'()*+.0123456789:=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_`abcdefghijklmnopqrstuvwxyz{|}~';
-var INITIAL_ESCAPES = {
-  '/': '0', ' ': '1', '"': 'a', ',': '2', ';': '3', '<': 'c', '\\': 'e'
-};
-
 var HPACK_TABLE = [
   '11111111111111111110111010',
   '11111111111111111110111011',
@@ -265,213 +260,195 @@ var HPACK_TABLE = [
   '1111111111111111111011100'
 ];
 
-// ripped mostly from
-// https://github.com/molnarg/node-http2-protocol/blob/master/lib/compressor.js
-function BinaryHpack(table, allowed, escaped) {
-  function createTree(codes, position) {
-    if (codes.length === 1) {
-      return [table.indexOf(codes[0])];
-    } else {
-      position = position || 0;
-      var zero = [];
-      var one = [];
-      for (var i = 0; i < codes.length; i++) {
-        var string = codes[i];
-        if (string[position] === '0') {
-          zero.push(string);
-        } else {
-          one.push(string);
-        }
-      }
-      return [createTree(zero, position + 1), createTree(one, position + 1)];
+var ALLOWED_COOKIE = '/!#$%&\'()*+.0123456789:=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]' +
+  '^_`abcdefghijklmnopqrstuvwxyz{|}~';
+
+function Node(c, p) {
+  this.c = c; // on leaf nodes: a symbol; on branch nodes: the arms
+  this.p = p;
+}
+Node.prototype = {
+  // combines two nodes into a branch node
+  combine: function(other) {
+    return new Node([this, other], this.p + other.p);
+  },
+  // returns true if this is a leaf
+  leaf: function() {
+    return !Array.isArray(this.c);
+  },
+  // returns the side with the shorter path
+  shortSide: function() {
+    if (this.c[1].p > this.c[0].p) {
+      return this.c[1];
     }
+    return this.c[0];
   }
+};
 
-  this.tree = createTree(table);
+// builds a binary tree based on symbol probabilities
+// input is a list of leaf nodes
+// output is a single root node
+function buildTree(symbols) {
+  function next() {
+    if (q.length === 0) {
+      return symbols.shift();
+    }
+    if (symbols.length === 0 || q[0].p < symbols[0].p) {
+      return q.shift();
+    }
+    return symbols.shift();
+  }
+  var q = [];
+  while(symbols.length + q.length > 1) {
+    q.push(next().combine(next()));
+  }
+  return q[0];
+}
 
-  this.codes = table.map(function(bits) {
-    return parseInt(bits, 2);
-  });
-  this.lengths = table.map(function(bits) {
+function walkTree(tree, path, pathMap) {
+  if (tree.leaf()) {
+    pathMap[tree.c] = { code: parseInt(path, 2), len: path.length, path: path };
+  } else {
+    walkTree(tree.c[0], path + '0', pathMap);
+    walkTree(tree.c[1], path + '1', pathMap);
+  }
+}
+
+function BinaryHpack(table, allowed) {
+  var inputLengths = table.map(function(bits) {
     return bits.length;
   });
 
-  this.allowed = allowed;
-
-  this.escaped = escaped;
-  this.reverseEscaped = {};
-  Object.keys(this.escaped).forEach(function(k) {
-    this.reverseEscaped[this.escaped[k]] = k.charCodeAt(0);
-  }.bind(this));
-
-  var escapeSequence = function(idx) {
-    var result = [];
-    while (idx > this.allowed.length) {
-      result.push('/');
-      idx -= this.allowed.length;
-    }
-    result.push(this.allowed.charAt(idx));
-    return result.join('');
-  }.bind(this);
-
-  var next = 0;
-  for (var i = 0; i <= 0xff; ++i) {
-    var c = String.fromCharCode(i);
-    if (!this.escaped.hasOwnProperty(c) && this.allowed.indexOf(c) < 0) {
-      var esc = escapeSequence(next);
-      while (this.reverseEscaped.hasOwnProperty(esc)) {
-        esc = escapeSequence(++next);
-      }
-      this.escaped[c] = esc;
-      this.reverseEscaped[esc] = i;
-      console.log('escape: ' + esc + ': ' + i.toString(16));
-   }
+  this.symbols = [];
+  for (var i = 0; i < allowed.length; ++i) {
+    var ch = allowed.charAt(i);
+    var code = allowed.charCodeAt(i);
+    this.symbols.push(new Node(ch, 1 / inputLengths[code]));
   }
+  this.symbols.sort(function(a, b) {
+    return a.p - b.p;
+  });
+  this.tree = buildTree(this.symbols.concat());
+
+  this.pathMap = {};
+  walkTree(this.tree, '', this.pathMap);
+
+  // we only keep this.symbols around for dealing with signaling of wasted
+  // bytes, so we can trim this to only what is needed
+  var longest = Object.keys(this.pathMap).reduce(function(a, k) {
+    if (this.pathMap[k].len > a) {
+      return this.pathMap[k].len;
+    }
+    return a;
+  }.bind(this), 0);
+  // need enough to signal 0 bytes wasted and up to
+  // (longest symbol - 1) bits wasted
+  var symbolsNeeded = Math.ceil((longest - 1) / 8) + 1;
+  this.symbols = this.symbols.slice(this.symbols.length - symbolsNeeded);
 }
 
 function bit(buffer, x) {
   var sh = 7 - (x & 0x7);
-  return (buffer[Math.floor(x / 8)] & (1 << sh)) >> sh ;
+  return (buffer[Math.floor(x / 8)] & (1 << sh)) >> sh;
+}
+
+// look at the last character to determine how many bytes were wasted
+function getWasteBytes(symbols, lastCharacter) {
+  for (var i = symbols.length - 1; i > 0; --i) {
+    if (symbols[i].c === lastCharacter) {
+      return symbols.length - 1 - i;
+    }
+  }
+  return -1; // not found, safe case
 }
 
 BinaryHpack.prototype = {
-  bhpack: function(buffer) {
+  encode: function(buffer) {
     var result = [];
-    var subtree = this.tree;
-
-    var push = function(code) {
-      var ch = String.fromCharCode(code);
-      if (this.allowed.indexOf(ch) < 0) {
-        result.push('/');
-        var esc = this.escaped[ch];
-        result.push(esc);
-        // return bits used:
-        // = 5*number of slashes
-        // + length of last character
-        return this.lengths[this.reverseEscaped[esc]];
-      }
-      result.push(ch);
-      return this.lengths[ch.charCodeAt(0)];
-    }.bind(this); // () =>
-
-    var start = 0;
-    var size = buffer.length * 8;
-    for (var i = 0; i < size; ++i) {
-      subtree = subtree[bit(buffer, i)];
-      if (subtree.length === 1) {
-        push(subtree[0]);
-        subtree = this.tree;
-        start = i + 1;
+    var cursor = this.tree;
+    for (var i = 0; i < buffer.length * 8; ++i) {
+      cursor = cursor.c[bit(buffer, i)];
+      if (cursor.leaf()) {
+        result.push(cursor.c);
+        cursor = this.tree;
       }
     }
 
-    // we didn't provide bits for the last character
-    if (subtree != this.tree) {
-      while(subtree.length !== 1) {
-        subtree = subtree[0];
+    // we have to complete an unfinished node
+    // and signal how many bytes are to be discarded
+    // on decode as a result
+    var wasteBits = 0;
+    if (cursor != this.tree) {
+      while(!cursor.leaf()) {
+        cursor = cursor.shortSide();
+        ++wasteBits;
       }
-      // we're wasting bits equal to the size of the entry
-      // less the number we need to encode
-      var pushedSize = push(subtree[0]);
-      var wasted = pushedSize - (size - start);
-      console.log(size, start, pushedSize, wasted);
-      // one slash for every byte (or part-byte) we are wasting
-      for (var i = 0; i < Math.ceil(wasted / 8); ++i) {
-        result.push('/');
-      }
+      result.push(cursor.c);
     }
-
+    var wasteBytes = Math.ceil(wasteBits / 8);
+    // for the waste byte indicator, we use the sorted symbol table,
+    // which should have the cheapest symbol at the end
+    // for each step away from the end, we've wasted more bytes
+    var signalIndex = this.symbols.length - wasteBytes - 1;
+    // hack to save more bytes:
+    // if we are wasting one byte (which is by far the most common case)
+    // then omit the waste sentinel character if it isn't a valid sentinel
+    if (wasteBytes !== 1 || getWasteBytes(cursor.c) >= 0) {
+      result.push(this.symbols[signalIndex].c);
+    }
     return result.join('');
   },
 
-  unbhpack: function(str) {
-    var b = [];
-    var trim = 0;
-    for (var i = 0; i < str.length; ++i) {
-      var ch = str.charAt(i);
-      if (ch === '/') {
-        var escaped = '';
-        while (++i < str.length) {
-          ch = str.charAt(i);
-          escaped += ch;
-          if (ch !== '/') {
-            b.push(this.reverseEscaped[escaped]);
-            console.log('escape: ' + escaped + ': ' + this.reverseEscaped[escaped].toString(16));
-            break;
-          }
-        }
-        if (ch === '/') {
-          trim = escaped.length + 1; // number of slashes == number of wasted bytes
-        }
-      } else {
-        b.push(ch.charCodeAt(0));
-      }
-    }
-    console.log(str + ' unbhpack ' + new Buffer(b).toString('hex') + ' trim ' + trim);
-    var result =  this.huff(new Buffer(b));
-    return result.slice(0, result.length - trim);
-  },
-
-  huff: function(buffer) {
+  decode: function(str) {
     var result = [];
-    var space = 8;
-
-    function add(data) {
-      if (space === 8) {
-        result.push(data);
-      } else {
-        result[result.length - 1] |= data;
-      }
-    }
-
-    for (var i = 0; i < buffer.length; i++) {
-      var b = buffer[i];
-      var code = this.codes[b];
-      var length = this.lengths[b];
-
-      while (length !== 0) {
-        if (space >= length) {
-          add(code << (space - length));
-          code = 0;
-          space -= length;
-          length = 0;
-        } else {
-          var shift = length - space;
-          var msb = code >> shift;
-          add(msb);
-          code -= msb << shift;
-          length -= space;
+    var space = 0;
+    function push(code, len) {
+      var d;
+      if (space > 0) {
+        if (len > space) {
+          d = code >> (len - space);
+          len -= space;
           space = 0;
+        } else {
+          d = code << (space - len);
+          space -= len;
+          len = 0;
         }
-
-        if (space === 0) {
-          space = 8;
-        }
+        result[result.length - 1] |= d;
+      }
+      while (len >= 8) {
+        d = code >> (len - 8);
+        result.push(d & 0xff);
+        len -= 8;
+      }
+      if (len > 0) {
+        d = code << (8 - len);
+        result.push(d & 0xff);
+        space = 8 - len;
       }
     }
-
-    if (space !== 8) {
-      add(this.codes[256] >> (this.lengths[256] - space));
+    for (var i = 0; i < str.length - 1; ++i) {
+      var entry = this.pathMap[str.charAt(i)];
+      push(entry.code, entry.len);
     }
-
-    return new Buffer(result);
-  },
-
-  dehuff: function(buffer) {
-    var result = [];
-    var subtree = this.tree;
-
-    for (var i = 0; i < buffer.length * 8; ++i) {
-      subtree = subtree[bit(buffer, i)];
-      if (subtree.length === 1) {
-        result.push(subtree[0]);
-        subtree = this.tree;
-      }
+    var tail = str.charAt(str.length - 1);
+    var waste = getWasteBytes(this.symbols, tail);
+    if (waste > 0) {
+      result = result.slice(0, result.length - waste);
+    } else {
+      // here the tail is needed
+      var entry = this.pathMap[tail];
+      push(entry.code, entry.len);
+      // but it's also responsible for a byte of waste
+      result.pop();
     }
-
     return new Buffer(result);
   }
 };
 
-// don't think that you can change this table...
-module.exports = new BinaryHpack(HPACK_TABLE, ALLOWED_CHARS, INITIAL_ESCAPES);
+module.exports = {
+  HPACK_TABLE: HPACK_TABLE,
+  ALLOWED_COOKIE: ALLOWED_COOKIE,
+  BinaryHpack: BinaryHpack,
+  cookie: new BinaryHpack(HPACK_TABLE, ALLOWED_COOKIE)
+};
