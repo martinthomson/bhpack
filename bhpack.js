@@ -262,6 +262,8 @@ var HPACK_TABLE = [
 
 var ALLOWED_COOKIE = '/!#$%&\'()*+.0123456789:=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]' +
   '^_`abcdefghijklmnopqrstuvwxyz{|}~';
+// TODO add URI path component encoder (esp query string values),
+//  which is probably more useful than the cookie one
 
 function Node(c, p) {
   this.c = c; // on leaf nodes: a symbol; on branch nodes: the arms
@@ -285,7 +287,7 @@ Node.prototype = {
   }
 };
 
-// builds a binary tree based on symbol probabilities
+// builds a Huffman tree based on symbol probabilities
 // input is a list of leaf nodes
 // output is a single root node
 function buildTree(symbols) {
@@ -314,22 +316,29 @@ function walkTree(tree, path, pathMap) {
   }
 }
 
+
+// Arithmetic or range coding would be more efficient here, but that's a rework
 function BinaryHpack(table, allowed) {
   var inputLengths = table.map(function(bits) {
     return bits.length;
   });
 
+  // here we take the symbols, look at their lengths and fake out
+  // relative probabilities for each
   this.symbols = [];
   for (var i = 0; i < allowed.length; ++i) {
     var ch = allowed.charAt(i);
     var code = allowed.charCodeAt(i);
     this.symbols.push(new Node(ch, 1 / inputLengths[code]));
   }
+  // sort by (ascending) probability
   this.symbols.sort(function(a, b) {
     return a.p - b.p;
   });
+  // and build a tree
   this.tree = buildTree(this.symbols.concat());
 
+  // the reverse tree is used to decode
   this.pathMap = {};
   walkTree(this.tree, '', this.pathMap);
 
@@ -402,6 +411,8 @@ BinaryHpack.prototype = {
   decode: function(str) {
     var result = [];
     var space = 0;
+
+    // from code, put len bits into result
     function push(code, len) {
       var d;
       if (space > 0) {
@@ -427,10 +438,14 @@ BinaryHpack.prototype = {
         space = 8 - len;
       }
     }
+
+    // straightforward table lookup, Huffman encoding
     for (var i = 0; i < str.length - 1; ++i) {
       var entry = this.pathMap[str.charAt(i)];
       push(entry.code, entry.len);
     }
+
+    // dealing with the trailing bits is tricky, see encode() for details
     var tail = str.charAt(str.length - 1);
     var waste = getWasteBytes(this.symbols, tail);
     if (waste > 0) {
